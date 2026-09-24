@@ -7,8 +7,6 @@ $currentPage = 'home';
 $cssPath = 'assets/css/style.css';
 $jsPath = 'assets/js/main.js';
 
-$db = getDB();
-
 // 获取排序参数
 $sort = $_GET['sort'] ?? 'time';
 $type = $_GET['type'] ?? '';
@@ -16,46 +14,61 @@ $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 10;
 $offset = ($page - 1) * $pageSize;
 
-// 构建查询
-$where = "WHERE status = 1";
-$params = [];
+// 加载失败时展示友好的重试状态，避免整页白屏
+$loadError = '';
+$messages = [];
+$total = 0;
+$totalPages = 0;
+$favoritedIds = [];
+$scrollMessages = [];
+$stats = ['total' => 0, 'help_count' => 0, 'suggest_count' => 0, 'lost_count' => 0];
 
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
-    $where .= " AND type = ?";
-    $params[] = $type;
+try {
+    $db = getDB();
+
+    // 构建查询
+    $where = "WHERE status = 1";
+    $params = [];
+
+    if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+        $where .= " AND type = ?";
+        $params[] = $type;
+    }
+
+    // 排序
+    $orderBy = ($sort === 'hot') ? "views DESC, created_at DESC" : "created_at DESC";
+
+    // 总数
+    $countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
+    $countStmt->execute($params);
+    $total = $countStmt->fetchColumn();
+    $totalPages = ceil($total / $pageSize);
+
+    // 列表
+    $sql = "SELECT id, nickname, type, title, content, image, views, created_at FROM messages $where ORDER BY $orderBy LIMIT $pageSize OFFSET $offset";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $messages = $stmt->fetchAll();
+
+    // 获取当前用户已收藏的留言ID
+    $favoritedIds = array_flip(getFavoritedMessageIds());
+
+    // 滚动数据（最新5条）
+    $scrollStmt = $db->query("SELECT id, type, title, created_at FROM messages WHERE status = 1 ORDER BY created_at DESC LIMIT 8");
+    $scrollMessages = $scrollStmt->fetchAll();
+
+    // 统计
+    $statsStmt = $db->query("SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN type='help' THEN 1 ELSE 0 END) as help_count,
+        SUM(CASE WHEN type='suggest' THEN 1 ELSE 0 END) as suggest_count,
+        SUM(CASE WHEN type='lost' THEN 1 ELSE 0 END) as lost_count
+        FROM messages WHERE status = 1");
+    $stats = $statsStmt->fetch();
+} catch (Throwable $e) {
+    error_log('[index] ' . $e->getMessage());
+    $loadError = '留言数据加载失败，可能是服务暂时不可用，请稍后重试。';
 }
-
-// 排序
-$orderBy = ($sort === 'hot') ? "views DESC, created_at DESC" : "created_at DESC";
-
-// 总数
-$countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
-$countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
-
-// 列表
-$sql = "SELECT id, nickname, type, title, content, image, views, created_at FROM messages $where ORDER BY $orderBy LIMIT $pageSize OFFSET $offset";
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$messages = $stmt->fetchAll();
-
-// 获取当前用户已收藏的留言ID
-$favoritedIds = getFavoritedMessageIds();
-$favoritedIds = array_flip($favoritedIds);
-
-// 滚动数据（最新5条）
-$scrollStmt = $db->query("SELECT id, type, title, created_at FROM messages WHERE status = 1 ORDER BY created_at DESC LIMIT 8");
-$scrollMessages = $scrollStmt->fetchAll();
-
-// 统计
-$statsStmt = $db->query("SELECT 
-    COUNT(*) as total,
-    SUM(CASE WHEN type='help' THEN 1 ELSE 0 END) as help_count,
-    SUM(CASE WHEN type='suggest' THEN 1 ELSE 0 END) as suggest_count,
-    SUM(CASE WHEN type='lost' THEN 1 ELSE 0 END) as lost_count
-    FROM messages WHERE status = 1");
-$stats = $statsStmt->fetch();
 
 include __DIR__ . '/includes/header.php';
 ?>
@@ -123,7 +136,13 @@ include __DIR__ . '/includes/header.php';
 <!-- 留言列表 -->
 <section class="message-list-section">
     <div class="container">
-        <?php if (empty($messages)): ?>
+        <?php if ($loadError): ?>
+        <div class="empty-state">
+            <div class="empty-icon">⚠️</div>
+            <p><?= cleanInput($loadError) ?></p>
+            <button type="button" class="btn btn-primary" onclick="location.reload()">🔄 重新加载</button>
+        </div>
+        <?php elseif (empty($messages)): ?>
         <div class="empty-state">
             <div class="empty-icon">📭</div>
             <p>暂无留言信息</p>

@@ -8,15 +8,35 @@ if ($id <= 0) {
     exit;
 }
 
-$db = getDB();
+try {
+    $db = getDB();
 
-// 增加浏览量
-$db->prepare("UPDATE messages SET views = views + 1 WHERE id = ?")->execute([$id]);
+    // 增加浏览量（失败不影响页面浏览）
+    try {
+        $db->prepare("UPDATE messages SET views = views + 1 WHERE id = ?")->execute([$id]);
+    } catch (Throwable $e) {
+        error_log('[detail] views update failed: ' . $e->getMessage());
+    }
 
-// 获取详情
-$stmt = $db->prepare("SELECT * FROM messages WHERE id = ? AND status = 1");
-$stmt->execute([$id]);
-$msg = $stmt->fetch();
+    // 获取详情（仅展示已通过审核的留言；被删除/未通过审核一律不可见）
+    $stmt = $db->prepare("SELECT * FROM messages WHERE id = ? AND status = 1");
+    $stmt->execute([$id]);
+    $msg = $stmt->fetch();
+} catch (Throwable $e) {
+    error_log('[detail] ' . $e->getMessage());
+    http_response_code(500);
+    $pageTitle = '页面暂时不可用';
+    $cssPath = 'assets/css/style.css';
+    include __DIR__ . '/includes/header.php';
+    echo '<section class="detail-section"><div class="container">'
+        . '<div class="empty-state"><div class="empty-icon">⚠️</div>'
+        . '<p>页面加载失败，可能是服务暂时不可用，请稍后重试。</p>'
+        . '<a href="index.php" class="btn btn-primary">返回首页</a> '
+        . '<button type="button" class="btn btn-secondary" onclick="location.reload()">🔄 重新加载</button>'
+        . '</div></div></section>';
+    include __DIR__ . '/includes/footer.php';
+    exit;
+}
 
 if (!$msg) {
     header('Location: index.php');
@@ -132,3 +152,9 @@ include __DIR__ . '/includes/header.php';
 </div>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>
+<script>
+// 从浏览器后退/前进恢复时重新加载，确保举报按钮等状态与服务端一致
+window.addEventListener('pageshow', function (e) {
+    if (e.persisted) location.reload();
+});
+</script>

@@ -59,6 +59,7 @@ try {
     $stmt = $db->prepare("INSERT INTO messages (nickname, phone, type, title, content, image, status) VALUES (?, ?, ?, ?, ?, ?, 0)");
     $stmt->execute([$nickname, $phone ?: null, $type, $title, $content, $imagePath]);
     jsonResponse(0, '留言提交成功，等待审核');
-} catch (Exception $e) {
+} catch (Throwable $e) {
+    error_log('[api/submit] ' . $e->getMessage());
     jsonResponse(500, '服务器错误，请稍后重试');
 }

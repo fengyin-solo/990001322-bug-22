@@ -8,7 +8,7 @@ $currentPage = 'admin';
 $cssPath = '../assets/css/style.css';
 $jsPath = '../assets/js/main.js';
 
-$db = getDB();
+header('Cache-Control: no-store, no-cache, must-revalidate');
 
 // 筛选参数
 $status = $_GET['status'] ?? '';
@@ -18,37 +18,54 @@ $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 15;
 $offset = ($page - 1) * $pageSize;
 
-$where = "WHERE 1=1";
-$params = [];
+$loadError = '';
+$messages = [];
+$total = 0;
+$totalPages = 0;
+$pendingCount = 0;
 
-if ($status !== '' && in_array($status, ['0', '1', '2'])) {
-    $where .= " AND status = ?";
-    $params[] = intval($status);
+try {
+    $db = getDB();
+
+    $where = "WHERE 1=1";
+    $params = [];
+
+    if ($status !== '' && in_array($status, ['0', '1', '2'])) {
+        $where .= " AND status = ?";
+        $params[] = intval($status);
+    }
+    if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+        $where .= " AND type = ?";
+        $params[] = $type;
+    }
+    if ($keyword) {
+        $where .= " AND (title LIKE ? OR content LIKE ? OR nickname LIKE ?)";
+        $kw = "%$keyword%";
+        $params[] = $kw;
+        $params[] = $kw;
+        $params[] = $kw;
+    }
+
+    $countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
+    $countStmt->execute($params);
+    $total = $countStmt->fetchColumn();
+    $totalPages = ceil($total / $pageSize);
+    if ($page > $totalPages && $total > 0) {
+        $page = (int) $totalPages;
+        $offset = ($page - 1) * $pageSize;
+    }
+
+    $sql = "SELECT * FROM messages $where ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $messages = $stmt->fetchAll();
+
+    // 统计
+    $pendingCount = (int) $db->query("SELECT COUNT(*) FROM messages WHERE status = 0")->fetchColumn();
+} catch (Throwable $e) {
+    error_log('[admin/index] ' . $e->getMessage());
+    $loadError = '留言数据加载失败，可能是数据库连接异常，请稍后重试。';
 }
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
-    $where .= " AND type = ?";
-    $params[] = $type;
-}
-if ($keyword) {
-    $where .= " AND (title LIKE ? OR content LIKE ? OR nickname LIKE ?)";
-    $kw = "%$keyword%";
-    $params[] = $kw;
-    $params[] = $kw;
-    $params[] = $kw;
-}
-
-$countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
-$countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
-
-$sql = "SELECT * FROM messages $where ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset";
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$messages = $stmt->fetchAll();
-
-// 统计
-$pendingCount = $db->query("SELECT COUNT(*) FROM messages WHERE status = 0")->fetchColumn();
 
 include __DIR__ . '/header.php';
 ?>
@@ -60,9 +77,16 @@ include __DIR__ . '/header.php';
         </div>
         <nav class="sidebar-nav">
             <a href="index.php" class="sidebar-link active">📝 留言管理</a>
-            <a href="index.php?status=0" class="sidebar-link">⏳ 待审核 <?= $pendingCount > 0 ? "($pendingCount)" : '' ?></a>
+            <a href="index.php?status=0" class="sidebar-link">⏳ 待审核留言 <?= $pendingCount > 0 ? "($pendingCount)" : '' ?></a>
             <a href="reports.php" class="sidebar-link">🚩 举报管理</a>
-            <?php $pendingReportCount = getPendingReportCount(); ?>
+            <?php
+            // 举报待处理数独立查询，避免与留言待审核数混用
+            try {
+                $pendingReportCount = getPendingReportCount();
+            } catch (Throwable $e) {
+                $pendingReportCount = 0;
+            }
+            ?>
             <a href="reports.php?status=0" class="sidebar-link">⏳ 待处理举报 <?= $pendingReportCount > 0 ? "($pendingReportCount)" : '' ?></a>
             <a href="../index.php" class="sidebar-link" target="_blank">🌐 查看前台</a>
             <a href="logout.php" class="sidebar-link">🚪 退出登录</a>
@@ -98,6 +122,13 @@ include __DIR__ . '/header.php';
 
         <!-- 留言表格 -->
         <div class="admin-table-wrapper">
+            <?php if ($loadError): ?>
+            <div class="empty-state" style="padding: 40px 0;">
+                <div class="empty-icon">⚠️</div>
+                <p><?= cleanInput($loadError) ?></p>
+                <button type="button" class="btn btn-primary" onclick="location.reload()">🔄 重新加载</button>
+            </div>
+            <?php else: ?>
             <table class="admin-table">
                 <thead>
                     <tr>
@@ -113,7 +144,22 @@ include __DIR__ . '/header.php';
                 </thead>
                 <tbody>
                     <?php if (empty($messages)): ?>
-                    <tr><td colspan="8" class="text-center">暂无数据</td></tr>
+                    <tr>
+                        <td colspan="8">
+                            <?php if ($status !== '' || $type !== '' || $keyword !== ''): ?>
+                            <div class="empty-state" style="padding:24px 0;">
+                                <div class="empty-icon">🔍</div>
+                                <p>没有符合筛选条件的留言</p>
+                                <a href="index.php" class="btn btn-secondary btn-sm">清除筛选条件</a>
+                            </div>
+                            <?php else: ?>
+                            <div class="empty-state" style="padding:24px 0;">
+                                <div class="empty-icon">📭</div>
+                                <p>暂无留言</p>
+                            </div>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
                     <?php else: ?>
                     <?php foreach ($messages as $msg): ?>
                     <tr>
@@ -139,10 +185,11 @@ include __DIR__ . '/header.php';
                     <?php endif; ?>
                 </tbody>
             </table>
+            <?php endif; ?>
         </div>
 
         <!-- 分页 -->
-        <?php if ($totalPages > 1): ?>
+        <?php if (!$loadError && $totalPages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
             <a href="index.php?page=<?= $page - 1 ?>&status=<?= $status ?>&type=<?= $type ?>&keyword=<?= urlencode($keyword) ?>" class="page-btn">上一页</a>
@@ -171,48 +218,69 @@ include __DIR__ . '/header.php';
 </div>
 
 <script>
+function postAction(body, confirmText, okText) {
+    return fetch('api.php', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: body
+    })
+    .then(function (r) {
+        return r.json().then(function (data) {
+            if (!r.ok && (!data || data.code === undefined)) throw new Error('HTTP ' + r.status);
+            return data;
+        });
+    });
+}
+
 function auditMessage(id, status) {
     const action = status === 1 ? '通过' : '拒绝';
     if (!confirm('确定要' + action + '这条留言吗？')) return;
-    fetch('api.php', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'action=audit&id=' + id + '&status=' + status
-    })
-    .then(r => r.json())
-    .then(data => {
+    postAction('action=audit&id=' + id + '&status=' + status)
+    .then(function (data) {
         if (data.code === 0) {
             alert('操作成功');
             location.reload();
+        } else if (data.code === 401) {
+            alert(data.msg || '登录已过期，请重新登录');
+            window.location.href = 'login.php';
         } else {
-            alert(data.msg);
+            alert((data.msg || '操作失败') + '，请重试');
         }
+    })
+    .catch(function () {
+        alert('网络异常，操作未提交，请检查网络后重试');
     });
 }
 
 function deleteMessage(id) {
     if (!confirm('确定要删除这条留言吗？此操作不可恢复！')) return;
-    fetch('api.php', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'action=delete&id=' + id
-    })
-    .then(r => r.json())
-    .then(data => {
+    postAction('action=delete&id=' + id)
+    .then(function (data) {
         if (data.code === 0) {
             alert('删除成功');
             location.reload();
+        } else if (data.code === 401) {
+            alert(data.msg || '登录已过期，请重新登录');
+            window.location.href = 'login.php';
         } else {
-            alert(data.msg);
+            alert((data.msg || '删除失败') + '，请重试');
         }
+    })
+    .catch(function () {
+        alert('网络异常，删除未提交，请检查网络后重试');
     });
 }
 
 function viewMessage(id) {
     document.getElementById('viewModal').style.display = 'flex';
     document.getElementById('modalBody').innerHTML = '加载中...';
-    fetch('api.php?action=detail&id=' + id)
-    .then(r => r.json())
+    fetch('api.php?action=detail&id=' + id, {cache: 'no-store'})
+    .then(function (r) {
+        return r.json().then(function (data) {
+            if (!r.ok && (!data || data.code === undefined)) throw new Error('HTTP ' + r.status);
+            return data;
+        });
+    })
     .then(data => {
         if (data.code === 0) {
             const d = data.data;
@@ -229,8 +297,17 @@ function viewMessage(id) {
             html += '</div>';
             document.getElementById('modalBody').innerHTML = html;
         } else {
-            document.getElementById('modalBody').innerHTML = data.msg;
+            document.getElementById('modalBody').innerHTML =
+                '<div class="empty-state" style="padding:24px 0;"><div class="empty-icon">⚠️</div>' +
+                '<p>' + (data.msg || '留言详情加载失败') + '</p>' +
+                '<button type="button" class="btn btn-primary btn-sm" onclick="viewMessage(' + id + ')">🔄 重试</button></div>';
         }
+    })
+    .catch(function () {
+        document.getElementById('modalBody').innerHTML =
+            '<div class="empty-state" style="padding:24px 0;"><div class="empty-icon">📡</div>' +
+            '<p>网络异常，留言详情加载失败，请检查网络后重试</p>' +
+            '<button type="button" class="btn btn-primary btn-sm" onclick="viewMessage(' + id + ')">🔄 重试</button></div>';
     });
 }
 
@@ -240,5 +317,10 @@ function closeModal() {
 
 document.getElementById('viewModal').addEventListener('click', function(e) {
     if (e.target === this) closeModal();
+});
+
+// 从 bfcache 恢复时刷新，避免状态/数字残留旧值
+window.addEventListener('pageshow', function (e) {
+    if (e.persisted) location.reload();
 });
 </script>

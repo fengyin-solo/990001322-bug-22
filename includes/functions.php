@@ -62,9 +62,13 @@ function timeAgo($datetime) {
 
 /**
  * 检查管理员登录
+ * @param bool $asJson 为 true 时（API 入口）未登录返回 JSON 401，而不是 302 跳转登录页
  */
-function requireAdmin() {
+function requireAdmin($asJson = false) {
     if (empty($_SESSION['admin_id'])) {
+        if ($asJson) {
+            jsonResponse(401, '登录已过期，请重新登录后再操作');
+        }
         header('Location: login.php');
         exit;
     }
@@ -200,37 +204,98 @@ function hasReported($messageId) {
 }
 
 /**
+ * 判断 PDO 异常是否为唯一键冲突
+ */
+function isDuplicateEntry(PDOException $e) {
+    return ($e->errorInfo[1] ?? null) == 1062;
+}
+
+/**
  * 提交举报
+ * 失败时抛出 Exception，其 code 约定：
+ *   1=参数无效, 3=已举报过(含并发唯一键冲突), 4=留言不存在或不可见, 5=服务异常
  */
 function submitReport($messageId, $reportType, $description = '') {
     $visitorId = getVisitorId();
     $db = getDB();
 
     $validTypes = ['spam', 'abuse', 'illegal', 'porn', 'other'];
-    if (!in_array($reportType, $validTypes)) {
-        throw new Exception('无效的举报类型');
+    if (!in_array($reportType, $validTypes, true)) {
+        throw new Exception('无效的举报类型', 1);
     }
 
     $stmt = $db->prepare("SELECT id FROM messages WHERE id = ? AND status = 1");
     $stmt->execute([$messageId]);
     if (!$stmt->fetch()) {
-        throw new Exception('留言不存在或未通过审核');
+        throw new Exception('留言不存在或未通过审核，无法举报', 4);
     }
 
     if (hasReported($messageId)) {
-        throw new Exception('您已经举报过这条留言了');
+        throw new Exception('您已经举报过这条留言了', 3);
     }
 
-    $stmt = $db->prepare("INSERT INTO reports (message_id, visitor_id, report_type, description) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$messageId, $visitorId, $reportType, $description]);
+    try {
+        $stmt = $db->prepare("INSERT INTO reports (message_id, visitor_id, report_type, description) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$messageId, $visitorId, $reportType, $description]);
+    } catch (PDOException $e) {
+        // 并发提交时唯一键(访客+留言)冲突，等同于已举报
+        if (isDuplicateEntry($e)) {
+            throw new Exception('您已经举报过这条留言了', 3);
+        }
+        error_log('[submitReport] ' . $e->getMessage());
+        throw new Exception('举报提交失败，请稍后重试', 5);
+    }
 
     return $db->lastInsertId();
 }
 
 /**
- * 获取待处理举报数量
+ * 获取待处理举报数量（仅统计举报表 status=0）
  */
 function getPendingReportCount() {
     $db = getDB();
-    return $db->query("SELECT COUNT(*) FROM reports WHERE status = 0")->fetchColumn();
+    return (int) $db->query("SELECT COUNT(*) FROM reports WHERE status = 0")->fetchColumn();
+}
+
+/**
+ * 获取待审核留言数量（仅统计留言表 status=0）
+ */
+function getPendingMessageCount() {
+    $db = getDB();
+    return (int) $db->query("SELECT COUNT(*) FROM messages WHERE status = 0")->fetchColumn();
+}
+
+/**
+ * 获取举报各状态数量
+ * 返回: ['total' => int, 'pending' => int, 'deleted' => int, 'ignored' => int, 'rejected' => int]
+ */
+function getReportStats() {
+    $db = getDB();
+    $stats = ['total' => 0, 'pending' => 0, 'deleted' => 0, 'ignored' => 0, 'rejected' => 0];
+    $rows = $db->query("SELECT status, COUNT(*) AS cnt FROM reports GROUP BY status")->fetchAll();
+    foreach ($rows as $row) {
+        $stats['total'] += (int) $row['cnt'];
+        switch ((int) $row['status']) {
+            case 0: $stats['pending'] = (int) $row['cnt']; break;
+            case 1: $stats['deleted'] = (int) $row['cnt']; break;
+            case 2: $stats['ignored'] = (int) $row['cnt']; break;
+            case 3: $stats['rejected'] = (int) $row['cnt']; break;
+        }
+    }
+    return $stats;
+}
+
+/**
+ * 按ID获取单条举报（含最新处理状态与处理人信息）
+ */
+function getReportById($id) {
+    $db = getDB();
+    $stmt = $db->prepare(
+        "SELECT r.*, a.username AS admin_name
+         FROM reports r
+         LEFT JOIN admins a ON r.processed_by = a.id
+         WHERE r.id = ?"
+    );
+    $stmt->execute([(int) $id]);
+    return $stmt->fetch() ?: null;
 }

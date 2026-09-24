@@ -92,6 +92,28 @@ define('DB_PASS', '');
 define('DB_NAME', 'community_board');
 ```
 
+## 从旧版本升级（举报功能数据修复）
+
+旧版本 `reports.message_id` 外键为 `ON DELETE CASCADE`，留言被删除时举报记录会被级联物理删除，
+导致待处理数量、统计与举报列表对不上、处理留痕丢失。升级时请执行一次迁移，
+将其改为 `ON DELETE SET NULL`（删除留言后保留举报记录、处理人与备注）：
+
+```bash
+# 方式一：PHP 迁移脚本（幂等，可重复执行）
+php database/migrate_reports_fk.php
+
+# 方式二：直接执行 SQL
+mysql -uroot -p community_board < database/migration_fix_reports_fk.sql
+```
+
+全新安装（install.php / cli_install.php）已包含正确结构，无需执行该迁移。
+
+### 并发处理说明
+
+同一举报被两名管理员同时处理时，后端使用原子条件更新（`UPDATE ... WHERE id=? AND status=0`），
+仅第一个提交生效；后提交者会收到“已被其他管理员处理”的冲突提示（含处理人、状态、时间、备注），
+页面同步为最新状态，不会出现双方都提示成功、处理人/备注被覆盖的情况。
+
 ## 使用说明
 
 ### 前台功能

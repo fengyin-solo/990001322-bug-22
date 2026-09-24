@@ -20,18 +20,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($username) || empty($password)) {
         $error = '请输入用户名和密码';
     } else {
-        $db = getDB();
-        $stmt = $db->prepare("SELECT * FROM admins WHERE username = ?");
-        $stmt->execute([$username]);
-        $admin = $stmt->fetch();
+        try {
+            $db = getDB();
+            $stmt = $db->prepare("SELECT * FROM admins WHERE username = ?");
+            $stmt->execute([$username]);
+            $admin = $stmt->fetch();
 
-        if ($admin && password_verify($password, $admin['password'])) {
-            $_SESSION['admin_id'] = $admin['id'];
-            $_SESSION['admin_name'] = $admin['username'];
-            header('Location: index.php');
-            exit;
-        } else {
-            $error = '用户名或密码错误';
+            if ($admin && password_verify($password, $admin['password'])) {
+                $_SESSION['admin_id'] = $admin['id'];
+                $_SESSION['admin_name'] = $admin['username'];
+                header('Location: index.php');
+                exit;
+            } else {
+                $error = '用户名或密码错误';
+            }
+        } catch (Throwable $e) {
+            error_log('[admin/login] ' . $e->getMessage());
+            $error = '服务暂时不可用，请稍后重试';
         }
     }
 }

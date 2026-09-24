@@ -55,7 +55,7 @@ try {
     // 举报表
     $pdo->exec("CREATE TABLE IF NOT EXISTS `reports` (
         `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        `message_id` INT UNSIGNED NOT NULL COMMENT '被举报的留言ID',
+        `message_id` INT UNSIGNED NULL DEFAULT NULL COMMENT '被举报的留言ID（留言删除后置空）',
         `visitor_id` VARCHAR(64) NOT NULL COMMENT '举报人访客标识',
         `report_type` VARCHAR(50) NOT NULL COMMENT '举报类型: spam垃圾信息, abuse辱骂攻击, illegal违法违规, porn色情低俗, other其他',
         `description` TEXT COMMENT '补充说明',
@@ -69,7 +69,7 @@ try {
         INDEX `idx_visitor_id` (`visitor_id`),
         INDEX `idx_status` (`status`),
         INDEX `idx_created` (`created_at`),
-        FOREIGN KEY (`message_id`) REFERENCES `messages`(`id`) ON DELETE CASCADE,
+        FOREIGN KEY (`message_id`) REFERENCES `messages`(`id`) ON DELETE SET NULL,
         FOREIGN KEY (`processed_by`) REFERENCES `admins`(`id`) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='举报表'");
 

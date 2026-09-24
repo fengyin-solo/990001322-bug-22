@@ -258,6 +258,8 @@ function submitReport() {
         return;
     }
 
+    // 防止重复提交（双击/网络慢时连续点击）
+    if (submitBtn.disabled) return;
     submitBtn.disabled = true;
     submitBtn.textContent = '提交中...';
 
@@ -267,35 +269,51 @@ function submitReport() {
     formData.append('description', description);
     formData.append('action', 'submit');
 
+    const markReported = function() {
+        const reportBtn = document.querySelector('.report-btn[data-message-id="' + messageId + '"]');
+        if (reportBtn) {
+            reportBtn.disabled = true;
+            reportBtn.classList.remove('btn-danger');
+            reportBtn.classList.add('btn-secondary');
+            const reportText = reportBtn.querySelector('.report-text');
+            if (reportText) {
+                reportText.textContent = '已举报';
+            }
+        }
+    };
+
     fetch('api/report.php', {
         method: 'POST',
         body: formData
     })
-    .then(response => response.json())
-    .then(result => {
+    .then(function (response) {
+        return response.json().then(function (result) {
+            return {ok: response.ok, result: result};
+        });
+    })
+    .then(function (res) {
+        const result = res.result || {};
         if (result.code === 0) {
-            showToast(result.msg, 'success');
+            showToast(result.msg || '举报提交成功，我们会尽快处理', 'success');
             closeReportModal();
-
-            const reportBtn = document.querySelector('.report-btn[data-message-id="' + messageId + '"]');
-            if (reportBtn) {
-                reportBtn.disabled = true;
-                reportBtn.classList.remove('btn-danger');
-                reportBtn.classList.add('btn-secondary');
-                const reportText = reportBtn.querySelector('.report-text');
-                if (reportText) {
-                    reportText.textContent = '已举报';
-                }
-            }
+            markReported();
         } else {
-            showToast(result.msg || '举报失败', 'error');
+            // 已举报过（含并发下的唯一键冲突）视为终态：按钮同步为“已举报”
+            if (result.code === 3 || (result.msg && result.msg.indexOf('已经举报') !== -1)) {
+                showToast(result.msg, 'warning');
+                closeReportModal();
+                markReported();
+            } else {
+                // 其他业务错误：保留填写内容，允许重试
+                showToast(result.msg || '举报失败，请重试', 'error');
+            }
         }
     })
-    .catch(error => {
+    .catch(function (error) {
         console.error('举报提交失败:', error);
-        showToast('网络错误，请稍后重试', 'error');
+        showToast('网络错误，举报未提交，请检查网络后重试', 'error');
     })
-    .finally(() => {
+    .finally(function () {
         submitBtn.disabled = false;
         submitBtn.textContent = '提交举报';
     });

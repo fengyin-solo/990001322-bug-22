@@ -136,6 +136,7 @@ a:hover { color: var(--primary-dark); }
     transition: var(--transition);
 }
 .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+a.stat-card { display: block; text-decoration: none; color: inherit; }
 .stat-card.stat-help { border-top-color: var(--danger); }
 .stat-card.stat-suggest { border-top-color: var(--warning); }
 .stat-card.stat-lost { border-top-color: var(--info); }

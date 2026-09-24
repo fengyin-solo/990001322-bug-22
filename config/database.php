@@ -16,7 +16,7 @@ function getDB() {
                 PDO::ATTR_EMULATE_PREPARES => false,
             ]);
         } catch (PDOException $e) {
-            die(json_encode(['code' => 500, 'msg' => '数据库连接失败']));
+            throw new RuntimeException('数据库连接失败，请稍后重试');
         }
     }
     return $pdo;

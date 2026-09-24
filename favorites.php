@@ -7,7 +7,6 @@ $currentPage = 'favorites';
 $cssPath = 'assets/css/style.css';
 $jsPath = 'assets/js/main.js';
 
-$db = getDB();
 $visitorId = getVisitorId();
 
 $type = $_GET['type'] ?? '';
@@ -15,42 +14,55 @@ $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 10;
 $offset = ($page - 1) * $pageSize;
 
-$where = "WHERE f.visitor_id = ? AND m.status = 1";
-$params = [$visitorId];
+$loadError = '';
+$total = 0;
+$totalPages = 0;
+$favorites = [];
+$stats = ['total' => 0, 'help_count' => 0, 'suggest_count' => 0, 'lost_count' => 0];
 
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
-    $where .= " AND m.type = ?";
-    $params[] = $type;
+try {
+    $db = getDB();
+
+    $where = "WHERE f.visitor_id = ? AND m.status = 1";
+    $params = [$visitorId];
+
+    if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+        $where .= " AND m.type = ?";
+        $params[] = $type;
+    }
+
+    $countSql = "SELECT COUNT(*) FROM favorites f INNER JOIN messages m ON f.message_id = m.id $where";
+    $countStmt = $db->prepare($countSql);
+    $countStmt->execute($params);
+    $total = $countStmt->fetchColumn();
+    $totalPages = ceil($total / $pageSize);
+
+    $sql = "SELECT m.id, m.nickname, m.type, m.title, m.content, m.image, m.views, m.created_at, f.created_at as favorited_at
+            FROM favorites f
+            INNER JOIN messages m ON f.message_id = m.id
+            $where
+            ORDER BY f.created_at DESC
+            LIMIT $pageSize OFFSET $offset";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $favorites = $stmt->fetchAll();
+
+    $favoritedIds = array_flip(getFavoritedMessageIds());
+
+    $statsStmt = $db->prepare("SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN m.type='help' THEN 1 ELSE 0 END) as help_count,
+        SUM(CASE WHEN m.type='suggest' THEN 1 ELSE 0 END) as suggest_count,
+        SUM(CASE WHEN m.type='lost' THEN 1 ELSE 0 END) as lost_count
+        FROM favorites f INNER JOIN messages m ON f.message_id = m.id
+        WHERE f.visitor_id = ? AND m.status = 1");
+    $statsStmt->execute([$visitorId]);
+    $stats = $statsStmt->fetch() ?: $stats;
+} catch (Throwable $e) {
+    error_log('[favorites] ' . $e->getMessage());
+    $loadError = '收藏数据加载失败，可能是服务暂时不可用，请稍后重试。';
+    $favoritedIds = [];
 }
-
-$countSql = "SELECT COUNT(*) FROM favorites f INNER JOIN messages m ON f.message_id = m.id $where";
-$countStmt = $db->prepare($countSql);
-$countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
-
-$sql = "SELECT m.id, m.nickname, m.type, m.title, m.content, m.image, m.views, m.created_at, f.created_at as favorited_at 
-        FROM favorites f 
-        INNER JOIN messages m ON f.message_id = m.id 
-        $where 
-        ORDER BY f.created_at DESC 
-        LIMIT $pageSize OFFSET $offset";
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$favorites = $stmt->fetchAll();
-
-$favoritedIds = getFavoritedMessageIds();
-$favoritedIds = array_flip($favoritedIds);
-
-$statsStmt = $db->prepare("SELECT 
-    COUNT(*) as total,
-    SUM(CASE WHEN m.type='help' THEN 1 ELSE 0 END) as help_count,
-    SUM(CASE WHEN m.type='suggest' THEN 1 ELSE 0 END) as suggest_count,
-    SUM(CASE WHEN m.type='lost' THEN 1 ELSE 0 END) as lost_count
-    FROM favorites f INNER JOIN messages m ON f.message_id = m.id 
-    WHERE f.visitor_id = ? AND m.status = 1");
-$statsStmt->execute([$visitorId]);
-$stats = $statsStmt->fetch();
 
 include __DIR__ . '/includes/header.php';
 ?>
@@ -94,11 +106,21 @@ include __DIR__ . '/includes/header.php';
 
 <section class="message-list-section">
     <div class="container">
-        <?php if (empty($favorites)): ?>
+        <?php if ($loadError): ?>
         <div class="empty-state">
-            <div class="empty-icon">⭐</div>
-            <p>暂无收藏的留言</p>
+            <div class="empty-icon">⚠️</div>
+            <p><?= cleanInput($loadError) ?></p>
+            <button type="button" class="btn btn-primary" onclick="location.reload()">🔄 重新加载</button>
+        </div>
+        <?php elseif (empty($favorites)): ?>
+        <div class="empty-state">
+            <div class="empty-icon"><?= $type ? '🔍' : '⭐' ?></div>
+            <p><?= $type ? '当前分类下暂无收藏的留言' : '暂无收藏的留言' ?></p>
+            <?php if ($type): ?>
+            <a href="favorites.php" class="btn btn-secondary">查看全部收藏</a>
+            <?php else: ?>
             <a href="index.php" class="btn btn-primary">去浏览留言</a>
+            <?php endif; ?>
         </div>
         <?php else: ?>
         <div class="message-list">
