@@ -200,6 +200,14 @@ function hasReported($messageId) {
 }
 
 /**
+ * 获取待审核留言数量（不含已删除留言）
+ */
+function getPendingMessageCount() {
+    $db = getDB();
+    return $db->query("SELECT COUNT(*) FROM messages WHERE status = 0 AND is_deleted = 0")->fetchColumn();
+}
+
+/**
  * 提交举报
  */
 function submitReport($messageId, $reportType, $description = '') {
@@ -211,7 +219,8 @@ function submitReport($messageId, $reportType, $description = '') {
         throw new Exception('无效的举报类型');
     }
 
-    $stmt = $db->prepare("SELECT id FROM messages WHERE id = ? AND status = 1");
+    // 只有已通过审核且未被删除的留言才能被举报
+    $stmt = $db->prepare("SELECT id FROM messages WHERE id = ? AND status = 1 AND is_deleted = 0");
     $stmt->execute([$messageId]);
     if (!$stmt->fetch()) {
         throw new Exception('留言不存在或未通过审核');
@@ -221,14 +230,24 @@ function submitReport($messageId, $reportType, $description = '') {
         throw new Exception('您已经举报过这条留言了');
     }
 
-    $stmt = $db->prepare("INSERT INTO reports (message_id, visitor_id, report_type, description) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$messageId, $visitorId, $reportType, $description]);
+    try {
+        // 说明按原文入库，输出时再做 HTML 转义，避免二次转义
+        $stmt = $db->prepare("INSERT INTO reports (message_id, visitor_id, report_type, description) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$messageId, $visitorId, $reportType, $description]);
+    } catch (PDOException $e) {
+        // 并发提交时唯一索引 (visitor_id, message_id) 可能冲突
+        if ($e->getCode() === '23000') {
+            throw new Exception('您已经举报过这条留言了');
+        }
+        throw new Exception('举报提交失败，请稍后重试');
+    }
 
     return $db->lastInsertId();
 }
 
 /**
  * 获取待处理举报数量
+ * 只统计举报本身（reports.status = 0），与留言审核状态无关
  */
 function getPendingReportCount() {
     $db = getDB();

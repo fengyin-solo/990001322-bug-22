@@ -17,7 +17,7 @@ if ($messageId <= 0) {
 
 $db = getDB();
 
-$stmt = $db->prepare("SELECT id FROM messages WHERE id = ? AND status = 1");
+$stmt = $db->prepare("SELECT id FROM messages WHERE id = ? AND status = 1 AND is_deleted = 0");
 $stmt->execute([$messageId]);
 if (!$stmt->fetch()) {
     jsonResponse(1, '留言不存在或未通过审核');

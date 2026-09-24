@@ -41,39 +41,33 @@ $countStmt->execute($params);
 $total = $countStmt->fetchColumn();
 $totalPages = ceil($total / $pageSize);
 
-$sql = "SELECT r.*, m.title as message_title, m.nickname as message_nickname, m.type as message_type, a.username as admin_name 
-        FROM reports r 
-        LEFT JOIN messages m ON r.message_id = m.id 
-        LEFT JOIN admins a ON r.processed_by = a.id 
-        $where 
-        ORDER BY r.created_at DESC 
+$sql = "SELECT r.*, m.title as message_title, m.nickname as message_nickname, m.type as message_type, m.is_deleted as message_is_deleted, a.username as admin_name
+        FROM reports r
+        LEFT JOIN messages m ON r.message_id = m.id
+        LEFT JOIN admins a ON r.processed_by = a.id
+        $where
+        ORDER BY r.created_at DESC
         LIMIT $pageSize OFFSET $offset";
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $reports = $stmt->fetchAll();
 
+// 待处理数量只统计举报本身；留言待审数量单独统计，避免两个数字混用
 $pendingCount = getPendingReportCount();
+$pendingMessageCount = getPendingMessageCount();
 $totalReportCount = $db->query("SELECT COUNT(*) FROM reports")->fetchColumn();
 $deletedCount = $db->query("SELECT COUNT(*) FROM reports WHERE status = 1")->fetchColumn();
 $ignoredCount = $db->query("SELECT COUNT(*) FROM reports WHERE status = 2")->fetchColumn();
+$rejectedCount = $db->query("SELECT COUNT(*) FROM reports WHERE status = 3")->fetchColumn();
+
+// 当前筛选条件下是否有任何过滤条件（用于区分“暂无数据”的原因）
+$hasFilter = ($status !== '' || $reportType !== '' || $keyword !== '');
 
 include __DIR__ . '/header.php';
 ?>
 
 <div class="admin-container">
-    <aside class="admin-sidebar">
-        <div class="sidebar-header">
-            <h3>📋 管理后台</h3>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="index.php" class="sidebar-link">📝 留言管理</a>
-            <a href="index.php?status=0" class="sidebar-link">⏳ 待审核 <?= $pendingCount > 0 ? "($pendingCount)" : '' ?></a>
-            <a href="reports.php" class="sidebar-link active">🚩 举报管理</a>
-            <a href="reports.php?status=0" class="sidebar-link">⏳ 待处理 <?= $pendingCount > 0 ? "($pendingCount)" : '' ?></a>
-            <a href="../index.php" class="sidebar-link" target="_blank">🌐 查看前台</a>
-            <a href="logout.php" class="sidebar-link">🚪 退出登录</a>
-        </nav>
-    </aside>
+    <?php $activeNav = 'reports'; include __DIR__ . '/sidebar.php'; ?>
 
     <div class="admin-main">
         <div class="admin-header">
@@ -81,7 +75,7 @@ include __DIR__ . '/header.php';
             <span class="admin-user">👤 <?= cleanInput($_SESSION['admin_name']) ?></span>
         </div>
 
-        <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 20px;">
+        <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 20px;">
             <div class="stat-card">
                 <div class="stat-number"><?= $totalReportCount ?></div>
                 <div class="stat-label">总举报数</div>
@@ -97,6 +91,10 @@ include __DIR__ . '/header.php';
             <div class="stat-card stat-lost">
                 <div class="stat-number"><?= $ignoredCount ?></div>
                 <div class="stat-label">已忽略</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?= $rejectedCount ?></div>
+                <div class="stat-label">已驳回</div>
             </div>
         </div>
 
@@ -139,20 +137,33 @@ include __DIR__ . '/header.php';
                 </thead>
                 <tbody>
                     <?php if (empty($reports)): ?>
-                    <tr><td colspan="8" class="text-center">暂无数据</td></tr>
+                    <tr>
+                        <td colspan="8" class="text-center">
+                            <div class="empty-state" style="padding: 36px 20px;">
+                                <div class="empty-icon">🚩</div>
+                                <?php if ($hasFilter): ?>
+                                    <p>没有符合筛选条件的举报</p>
+                                    <a href="reports.php" class="btn btn-secondary btn-sm">清除筛选条件</a>
+                                <?php else: ?>
+                                    <p>暂无举报记录</p>
+                                <?php endif; ?>
+                            </div>
+                        </td>
+                    </tr>
                     <?php else: ?>
                     <?php foreach ($reports as $r): ?>
+                    <?php $messageAvailable = !empty($r['message_title']) && (int)$r['message_is_deleted'] === 0; ?>
                     <tr>
                         <td><?= $r['id'] ?></td>
                         <td><span class="badge badge-<?= $r['report_type'] ?>"><?= getReportTypeLabel($r['report_type']) ?></span></td>
-                        <td class="td-title" title="<?= cleanInput($r['message_title'] ?? '留言已删除') ?>">
-                            <?php if ($r['message_title']): ?>
+                        <td class="td-title" title="<?= $messageAvailable ? cleanInput($r['message_title']) : '留言已删除' ?>">
+                            <?php if ($messageAvailable): ?>
                                 <a href="../detail.php?id=<?= $r['message_id'] ?>" target="_blank"><?= cleanInput(mb_substr($r['message_title'], 0, 15)) ?></a>
                             <?php else: ?>
                                 <span class="text-muted">留言已删除</span>
                             <?php endif; ?>
                         </td>
-                        <td><?= cleanInput($r['message_nickname'] ?? '-') ?></td>
+                        <td><?= $messageAvailable ? cleanInput($r['message_nickname']) : '-' ?></td>
                         <td><span class="status-badge report-status-<?= getReportStatusClass($r['status']) ?>"><?= getReportStatusLabel($r['status']) ?></span></td>
                         <td class="td-time"><?= date('m-d H:i', strtotime($r['created_at'])) ?></td>
                         <td><?= $r['admin_name'] ? cleanInput($r['admin_name']) : '-' ?></td>
@@ -182,9 +193,9 @@ include __DIR__ . '/header.php';
             <?php if ($page < $totalPages): ?>
             <a href="reports.php?page=<?= $page + 1 ?>&status=<?= $status ?>&report_type=<?= $reportType ?>&keyword=<?= urlencode($keyword) ?>" class="page-btn">下一页</a>
             <?php endif; ?>
-            <span class="page-info">共 <?= $total ?> 条</span>
         </div>
         <?php endif; ?>
+        <p class="page-info text-center" style="margin: 12px 0; color: var(--gray-500, #6b7280);">共 <?= (int)$total ?> 条举报记录</p>
     </div>
 </div>
 
@@ -211,7 +222,7 @@ include __DIR__ . '/header.php';
             </div>
             <div class="form-actions">
                 <button type="button" class="btn btn-secondary" onclick="closeProcessNoteModal()">取消</button>
-                <button type="button" class="btn btn-primary" onclick="confirmProcess()">确认处理</button>
+                <button type="button" class="btn btn-primary" id="confirmProcessBtn" onclick="confirmProcess()">确认处理</button>
             </div>
         </div>
     </div>
@@ -220,52 +231,94 @@ include __DIR__ . '/header.php';
 <script>
 let pendingProcessId = null;
 let pendingProcessStatus = null;
+let processing = false;
+let currentViewId = null;
+
+function escapeHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function reportErrorBody(message, retryFn) {
+    return '<div class="empty-state" style="padding: 30px 16px;">'
+        + '<div class="empty-icon">⚠️</div>'
+        + '<p>' + escapeHtml(message) + '</p>'
+        + (retryFn ? '<button type="button" class="btn btn-primary btn-sm" id="reportRetryBtn">重试</button>' : '')
+        + '</div>';
+}
 
 function viewReport(id) {
+    currentViewId = id;
     document.getElementById('reportViewModal').style.display = 'flex';
-    document.getElementById('reportViewBody').innerHTML = '加载中...';
-    fetch('api.php?action=report_detail&id=' + id)
-    .then(r => r.json())
+    loadReportDetail(id);
+}
+
+function loadReportDetail(id) {
+    const body = document.getElementById('reportViewBody');
+    body.innerHTML = '加载中...';
+    fetch('api.php?action=report_detail&id=' + id, {cache: 'no-store'})
+    .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    })
     .then(data => {
         if (data.code === 0) {
-            const d = data.data;
-            let html = '<div class="detail-view">';
-            html += '<p><strong>举报ID：</strong>' + d.id + '</p>';
-            html += '<p><strong>举报类型：</strong><span class="badge badge-' + d.report_type + '">' + d.report_type_label + '</span></p>';
-            html += '<p><strong>举报时间：</strong>' + d.created_at + '</p>';
-            html += '<p><strong>举报状态：</strong><span class="status-badge report-status-' + d.status_class + '">' + d.status_label + '</span></p>';
-            if (d.description) {
-                html += '<p><strong>举报说明：</strong></p><div class="detail-text">' + d.description + '</div>';
-            }
-            html += '<hr style="margin: 16px 0; border: none; border-top: 1px solid #e5e7eb;">';
-            html += '<h4 style="margin-bottom: 12px;">被举报留言信息</h4>';
-            if (d.message_exists) {
-                html += '<p><strong>留言标题：</strong>' + d.message_title + '</p>';
-                html += '<p><strong>留言作者：</strong>' + d.message_nickname + '</p>';
-                html += '<p><strong>留言类型：</strong>' + d.message_type_label + '</p>';
-                html += '<p><strong>留言内容：</strong></p><div class="detail-text">' + d.message_content + '</div>';
-                if (d.message_image) {
-                    html += '<p><strong>留言图片：</strong><br><img src="../' + d.message_image + '" style="max-width:100%;margin-top:8px;"></p>';
-                }
-                html += '<p><a href="../detail.php?id=' + d.message_id + '" target="_blank" class="btn btn-sm btn-info">查看原留言</a></p>';
-            } else {
-                html += '<p class="text-muted">该留言已被删除</p>';
-            }
-            if (d.status > 0) {
-                html += '<hr style="margin: 16px 0; border: none; border-top: 1px solid #e5e7eb;">';
-                html += '<h4 style="margin-bottom: 12px;">处理信息</h4>';
-                html += '<p><strong>处理人：</strong>' + (d.admin_name || '-') + '</p>';
-                html += '<p><strong>处理时间：</strong>' + (d.processed_at || '-') + '</p>';
-                if (d.process_note) {
-                    html += '<p><strong>处理备注：</strong></p><div class="detail-text">' + d.process_note + '</div>';
-                }
-            }
-            html += '</div>';
-            document.getElementById('reportViewBody').innerHTML = html;
+            renderReportDetail(data.data);
         } else {
-            document.getElementById('reportViewBody').innerHTML = data.msg;
+            body.innerHTML = reportErrorBody(data.msg || '举报详情加载失败', () => loadReportDetail(id));
+            bindRetry(id);
         }
+    })
+    .catch(() => {
+        body.innerHTML = reportErrorBody('网络异常，举报详情加载失败', () => loadReportDetail(id));
+        bindRetry(id);
     });
+}
+
+function bindRetry(id) {
+    const btn = document.getElementById('reportRetryBtn');
+    if (btn) btn.addEventListener('click', () => loadReportDetail(id));
+}
+
+function renderReportDetail(d) {
+    let html = '<div class="detail-view">';
+    html += '<p><strong>举报ID：</strong>' + d.id + '</p>';
+    html += '<p><strong>举报类型：</strong><span class="badge badge-' + escapeHtml(d.report_type) + '">' + escapeHtml(d.report_type_label) + '</span></p>';
+    html += '<p><strong>举报时间：</strong>' + escapeHtml(d.created_at) + '</p>';
+    html += '<p><strong>举报状态：</strong><span class="status-badge report-status-' + escapeHtml(d.status_class) + '">' + escapeHtml(d.status_label) + '</span></p>';
+    if (d.description) {
+        html += '<p><strong>举报说明：</strong></p><div class="detail-text">' + d.description + '</div>';
+    } else {
+        html += '<p><strong>举报说明：</strong><span class="text-muted">未填写</span></p>';
+    }
+    html += '<hr style="margin: 16px 0; border: none; border-top: 1px solid #e5e7eb;">';
+    html += '<h4 style="margin-bottom: 12px;">被举报留言信息</h4>';
+    if (d.message_exists) {
+        html += '<p><strong>留言标题：</strong>' + d.message_title + '</p>';
+        html += '<p><strong>留言作者：</strong>' + d.message_nickname + '</p>';
+        html += '<p><strong>留言类型：</strong>' + d.message_type_label + '</p>';
+        html += '<p><strong>留言内容：</strong></p><div class="detail-text">' + d.message_content + '</div>';
+        if (d.message_image) {
+            html += '<p><strong>留言图片：</strong><br><img src="../' + d.message_image + '" style="max-width:100%;margin-top:8px;"></p>';
+        }
+        html += '<p><a href="../detail.php?id=' + d.message_id + '" target="_blank" class="btn btn-sm btn-info">查看原留言</a></p>';
+    } else {
+        html += '<p class="text-muted">该留言已被删除</p>';
+    }
+    if (d.status > 0) {
+        html += '<hr style="margin: 16px 0; border: none; border-top: 1px solid #e5e7eb;">';
+        html += '<h4 style="margin-bottom: 12px;">处理信息</h4>';
+        html += '<p><strong>处理人：</strong>' + (d.admin_name || '-') + '</p>';
+        html += '<p><strong>处理时间：</strong>' + (d.processed_at ? escapeHtml(d.processed_at) : '-') + '</p>';
+        if (d.process_note) {
+            html += '<p><strong>处理备注：</strong></p><div class="detail-text">' + d.process_note + '</div>';
+        } else {
+            html += '<p><strong>处理备注：</strong><span class="text-muted">无</span></p>';
+        }
+    }
+    html += '</div>';
+    document.getElementById('reportViewBody').innerHTML = html;
 }
 
 function closeReportViewModal() {
@@ -301,6 +354,7 @@ function closeProcessNoteModal() {
 
 function confirmProcess() {
     if (!pendingProcessId || !pendingProcessStatus) return;
+    if (processing) return; // 防止重复提交
 
     const note = document.getElementById('processNote').value;
     const formData = new FormData();
@@ -309,18 +363,45 @@ function confirmProcess() {
     formData.append('status', pendingProcessStatus);
     formData.append('note', note);
 
+    const submitBtn = document.getElementById('confirmProcessBtn');
+    const setLoading = function(loading) {
+        processing = loading;
+        submitBtn.disabled = loading;
+        submitBtn.textContent = loading ? '处理中...' : '确认处理';
+    };
+
+    setLoading(true);
     fetch('api.php', {
         method: 'POST',
-        body: formData
+        body: formData,
+        cache: 'no-store'
     })
-    .then(r => r.json())
+    .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    })
     .then(data => {
         if (data.code === 0) {
             alert('操作成功');
             closeProcessNoteModal();
+            // 整页刷新：列表状态、处理人、待处理数字、侧边栏待办全部以服务器最新数据为准
+            location.reload();
+        } else if (data.data && data.data.conflict) {
+            // 并发冲突：举报已被另一方处理，明确提示后刷新以展示最新状态
+            alert(data.msg);
+            closeProcessNoteModal();
             location.reload();
         } else {
-            alert(data.msg);
+            alert(data.msg || '操作失败，请稍后重试');
+            setLoading(false);
+        }
+    })
+    .catch(() => {
+        if (confirm('网络异常，操作结果未知。点“确定”重新提交，点“取消”留在当前页。')) {
+            setLoading(false);
+            confirmProcess();
+        } else {
+            setLoading(false);
         }
     });
 }

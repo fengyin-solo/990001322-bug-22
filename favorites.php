@@ -15,7 +15,7 @@ $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 10;
 $offset = ($page - 1) * $pageSize;
 
-$where = "WHERE f.visitor_id = ? AND m.status = 1";
+$where = "WHERE f.visitor_id = ? AND m.status = 1 AND m.is_deleted = 0";
 $params = [$visitorId];
 
 if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
@@ -48,7 +48,7 @@ $statsStmt = $db->prepare("SELECT
     SUM(CASE WHEN m.type='suggest' THEN 1 ELSE 0 END) as suggest_count,
     SUM(CASE WHEN m.type='lost' THEN 1 ELSE 0 END) as lost_count
     FROM favorites f INNER JOIN messages m ON f.message_id = m.id 
-    WHERE f.visitor_id = ? AND m.status = 1");
+    WHERE f.visitor_id = ? AND m.status = 1 AND m.is_deleted = 0");
 $statsStmt->execute([$visitorId]);
 $stats = $statsStmt->fetch();
 

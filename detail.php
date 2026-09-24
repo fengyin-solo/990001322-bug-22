@@ -10,11 +10,8 @@ if ($id <= 0) {
 
 $db = getDB();
 
-// 增加浏览量
-$db->prepare("UPDATE messages SET views = views + 1 WHERE id = ?")->execute([$id]);
-
-// 获取详情
-$stmt = $db->prepare("SELECT * FROM messages WHERE id = ? AND status = 1");
+// 获取详情（举报处理删除的留言为软删除，前台不可见）
+$stmt = $db->prepare("SELECT * FROM messages WHERE id = ? AND status = 1 AND is_deleted = 0");
 $stmt->execute([$id]);
 $msg = $stmt->fetch();
 
@@ -22,6 +19,10 @@ if (!$msg) {
     header('Location: index.php');
     exit;
 }
+
+// 确认留言存在后再增加浏览量
+$db->prepare("UPDATE messages SET views = views + 1 WHERE id = ?")->execute([$id]);
+$msg['views'] = $msg['views'] + 1;
 
 $pageTitle = cleanInput($msg['title']) . ' - 社区便民留言板';
 $currentPage = '';

@@ -244,9 +244,11 @@ function initReportForm() {
 /**
  * 提交举报
  */
+let reportSubmitting = false;
 function submitReport() {
     const form = document.getElementById('reportForm');
     if (!form) return;
+    if (reportSubmitting) return; // 请求进行中，防止重复提交
 
     const submitBtn = document.getElementById('reportSubmitBtn');
     const messageId = document.getElementById('reportMessageId').value;
@@ -258,6 +260,7 @@ function submitReport() {
         return;
     }
 
+    reportSubmitting = true;
     submitBtn.disabled = true;
     submitBtn.textContent = '提交中...';
 
@@ -271,7 +274,10 @@ function submitReport() {
         method: 'POST',
         body: formData
     })
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+    })
     .then(result => {
         if (result.code === 0) {
             showToast(result.msg, 'success');
@@ -288,14 +294,15 @@ function submitReport() {
                 }
             }
         } else {
-            showToast(result.msg || '举报失败', 'error');
+            showToast(result.msg || '举报失败，请稍后重试', 'error');
         }
     })
     .catch(error => {
         console.error('举报提交失败:', error);
-        showToast('网络错误，请稍后重试', 'error');
+        showToast('网络错误，举报未提交，请稍后重试', 'error');
     })
     .finally(() => {
+        reportSubmitting = false;
         submitBtn.disabled = false;
         submitBtn.textContent = '提交举报';
     });

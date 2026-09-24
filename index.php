@@ -17,7 +17,7 @@ $pageSize = 10;
 $offset = ($page - 1) * $pageSize;
 
 // 构建查询
-$where = "WHERE status = 1";
+$where = "WHERE status = 1 AND is_deleted = 0";
 $params = [];
 
 if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
@@ -45,7 +45,7 @@ $favoritedIds = getFavoritedMessageIds();
 $favoritedIds = array_flip($favoritedIds);
 
 // 滚动数据（最新5条）
-$scrollStmt = $db->query("SELECT id, type, title, created_at FROM messages WHERE status = 1 ORDER BY created_at DESC LIMIT 8");
+$scrollStmt = $db->query("SELECT id, type, title, created_at FROM messages WHERE status = 1 AND is_deleted = 0 ORDER BY created_at DESC LIMIT 8");
 $scrollMessages = $scrollStmt->fetchAll();
 
 // 统计
@@ -54,7 +54,7 @@ $statsStmt = $db->query("SELECT
     SUM(CASE WHEN type='help' THEN 1 ELSE 0 END) as help_count,
     SUM(CASE WHEN type='suggest' THEN 1 ELSE 0 END) as suggest_count,
     SUM(CASE WHEN type='lost' THEN 1 ELSE 0 END) as lost_count
-    FROM messages WHERE status = 1");
+    FROM messages WHERE status = 1 AND is_deleted = 0");
 $stats = $statsStmt->fetch();
 
 include __DIR__ . '/includes/header.php';

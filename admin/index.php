@@ -18,7 +18,7 @@ $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 15;
 $offset = ($page - 1) * $pageSize;
 
-$where = "WHERE 1=1";
+$where = "WHERE is_deleted = 0";
 $params = [];
 
 if ($status !== '' && in_array($status, ['0', '1', '2'])) {
@@ -47,27 +47,14 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $messages = $stmt->fetchAll();
 
-// 统计
-$pendingCount = $db->query("SELECT COUNT(*) FROM messages WHERE status = 0")->fetchColumn();
+// 统计（待审核只统计未删除的留言）
+$pendingCount = getPendingMessageCount();
 
 include __DIR__ . '/header.php';
 ?>
 
 <div class="admin-container">
-    <aside class="admin-sidebar">
-        <div class="sidebar-header">
-            <h3>📋 管理后台</h3>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="index.php" class="sidebar-link active">📝 留言管理</a>
-            <a href="index.php?status=0" class="sidebar-link">⏳ 待审核 <?= $pendingCount > 0 ? "($pendingCount)" : '' ?></a>
-            <a href="reports.php" class="sidebar-link">🚩 举报管理</a>
-            <?php $pendingReportCount = getPendingReportCount(); ?>
-            <a href="reports.php?status=0" class="sidebar-link">⏳ 待处理举报 <?= $pendingReportCount > 0 ? "($pendingReportCount)" : '' ?></a>
-            <a href="../index.php" class="sidebar-link" target="_blank">🌐 查看前台</a>
-            <a href="logout.php" class="sidebar-link">🚪 退出登录</a>
-        </nav>
-    </aside>
+    <?php $activeNav = 'messages'; include __DIR__ . '/sidebar.php'; ?>
 
     <div class="admin-main">
         <div class="admin-header">
@@ -113,7 +100,19 @@ include __DIR__ . '/header.php';
                 </thead>
                 <tbody>
                     <?php if (empty($messages)): ?>
-                    <tr><td colspan="8" class="text-center">暂无数据</td></tr>
+                    <tr>
+                        <td colspan="8" class="text-center">
+                            <div class="empty-state" style="padding: 36px 20px;">
+                                <div class="empty-icon">📭</div>
+                                <?php if ($status !== '' || $type !== '' || $keyword !== ''): ?>
+                                    <p>没有符合筛选条件的留言</p>
+                                    <a href="index.php" class="btn btn-secondary btn-sm">清除筛选条件</a>
+                                <?php else: ?>
+                                    <p>暂无留言数据</p>
+                                <?php endif; ?>
+                            </div>
+                        </td>
+                    </tr>
                     <?php else: ?>
                     <?php foreach ($messages as $msg): ?>
                     <tr>
@@ -171,48 +170,59 @@ include __DIR__ . '/header.php';
 </div>
 
 <script>
+function postAction(body, okText) {
+    return fetch('api.php', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: body
+    })
+    .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    });
+}
+
 function auditMessage(id, status) {
     const action = status === 1 ? '通过' : '拒绝';
     if (!confirm('确定要' + action + '这条留言吗？')) return;
-    fetch('api.php', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'action=audit&id=' + id + '&status=' + status
-    })
-    .then(r => r.json())
+    postAction('action=audit&id=' + id + '&status=' + status)
     .then(data => {
         if (data.code === 0) {
             alert('操作成功');
             location.reload();
         } else {
-            alert(data.msg);
+            // 可能已被其他人删除或状态已变化，提示并刷新到最新状态
+            alert(data.msg || '操作失败，请刷新后重试');
+            location.reload();
         }
-    });
+    })
+    .catch(() => alert('网络异常，操作未完成，请稍后重试'));
 }
 
 function deleteMessage(id) {
-    if (!confirm('确定要删除这条留言吗？此操作不可恢复！')) return;
-    fetch('api.php', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'action=delete&id=' + id
-    })
-    .then(r => r.json())
+    if (!confirm('确定要删除这条留言吗？删除后前台将不再展示！')) return;
+    postAction('action=delete&id=' + id)
     .then(data => {
         if (data.code === 0) {
             alert('删除成功');
             location.reload();
         } else {
-            alert(data.msg);
+            alert(data.msg || '删除失败，请刷新后重试');
+            location.reload();
         }
-    });
+    })
+    .catch(() => alert('网络异常，删除未完成，请稍后重试'));
 }
 
 function viewMessage(id) {
     document.getElementById('viewModal').style.display = 'flex';
-    document.getElementById('modalBody').innerHTML = '加载中...';
-    fetch('api.php?action=detail&id=' + id)
-    .then(r => r.json())
+    const modalBody = document.getElementById('modalBody');
+    modalBody.innerHTML = '加载中...';
+    fetch('api.php?action=detail&id=' + id, {cache: 'no-store'})
+    .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    })
     .then(data => {
         if (data.code === 0) {
             const d = data.data;
@@ -227,10 +237,13 @@ function viewMessage(id) {
             html += '<p><strong>浏览量：</strong>' + d.views + '</p>';
             html += '<p><strong>时间：</strong>' + d.created_at + '</p>';
             html += '</div>';
-            document.getElementById('modalBody').innerHTML = html;
+            modalBody.innerHTML = html;
         } else {
-            document.getElementById('modalBody').innerHTML = data.msg;
+            modalBody.innerHTML = '<div class="empty-state" style="padding:30px 16px;"><div class="empty-icon">⚠️</div><p>' + (data.msg || '详情加载失败') + '</p><button type="button" class="btn btn-primary btn-sm" onclick="viewMessage(' + id + ')">重试</button></div>';
         }
+    })
+    .catch(() => {
+        modalBody.innerHTML = '<div class="empty-state" style="padding:30px 16px;"><div class="empty-icon">⚠️</div><p>网络异常，详情加载失败</p><button type="button" class="btn btn-primary btn-sm" onclick="viewMessage(' + id + ')">重试</button></div>';
     });
 }
 
